@@ -1,0 +1,328 @@
+[
+  {
+    "id": "patients",
+    "name": "Patients",
+    "archived": false,
+    "fields": [
+      {
+        "key": "patient_number",
+        "type": "string",
+        "required": true,
+        "is_key": true
+      },
+      {
+        "key": "first_name",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "last_name",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "date_of_birth",
+        "type": "date",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "care_team_code",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "current_program_key",
+        "type": "string",
+        "required": false,
+        "is_key": false
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      }
+    ],
+    "relationships": [
+      {
+        "key": "care_team",
+        "target_taxonomy_id": "care_teams",
+        "cardinality": "to_one",
+        "match": [
+          {
+            "source_field": "care_team_code",
+            "target_field": "team_code"
+          }
+        ]
+      },
+      {
+        "key": "current_enrollment",
+        "target_taxonomy_id": "program_enrollments",
+        "cardinality": "to_one",
+        "match": [
+          {
+            "source_field": "patient_number",
+            "target_field": "patient_number"
+          },
+          {
+            "source_field": "current_program_key",
+            "target_field": "program_key"
+          }
+        ]
+      },
+      {
+        "key": "support_tickets",
+        "target_taxonomy_id": "support_tickets",
+        "cardinality": "to_many",
+        "match": [
+          {
+            "source_field": "patient_number",
+            "target_field": "patient_number"
+          }
+        ]
+      },
+      {
+        "key": "coaching_sessions",
+        "target_taxonomy_id": "coaching_sessions",
+        "cardinality": "to_many_through",
+        "through": ["current_enrollment", "coaching_sessions"]
+      }
+    ]
+  },
+  {
+    "id": "care_teams",
+    "name": "Care Teams",
+    "archived": false,
+    "fields": [
+      {
+        "key": "team_code",
+        "type": "string",
+        "required": true,
+        "is_key": true
+      },
+      {
+        "key": "assigned_nurse",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "clinic_code",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "on_call",
+        "type": "boolean",
+        "required": true,
+        "is_key": false
+      }
+    ],
+    "relationships": [
+      {
+        "key": "clinic",
+        "target_taxonomy_id": "clinics",
+        "cardinality": "to_one",
+        "match": [
+          {
+            "source_field": "clinic_code",
+            "target_field": "clinic_code"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "clinics",
+    "name": "Clinics",
+    "archived": false,
+    "fields": [
+      {
+        "key": "clinic_code",
+        "type": "string",
+        "required": true,
+        "is_key": true
+      },
+      {
+        "key": "name",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "region",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "bed_count",
+        "type": "integer",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "quality_score",
+        "type": "float",
+        "required": true,
+        "is_key": false
+      }
+    ],
+    "relationships": []
+  },
+  {
+    "id": "support_tickets",
+    "name": "Support Tickets",
+    "archived": false,
+    "fields": [
+      {
+        "key": "ticket_number",
+        "type": "string",
+        "required": true,
+        "is_key": true
+      },
+      {
+        "key": "patient_number",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "priority",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "is_urgent",
+        "type": "boolean",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "opened_at",
+        "type": "datetime",
+        "required": true,
+        "is_key": false
+      }
+    ],
+    "relationships": []
+  },
+  {
+    "id": "program_enrollments",
+    "name": "Program Enrollments",
+    "archived": false,
+    "fields": [
+      {
+        "key": "enrollment_key",
+        "type": "string",
+        "required": true,
+        "is_key": true
+      },
+      {
+        "key": "patient_number",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "program_key",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "status",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "enrolled_on",
+        "type": "date",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "opted_in",
+        "type": "boolean",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "assigned_coach",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      }
+    ],
+    "relationships": [
+      {
+        "key": "coaching_sessions",
+        "target_taxonomy_id": "coaching_sessions",
+        "cardinality": "to_many",
+        "match": [
+          {
+            "source_field": "enrollment_key",
+            "target_field": "enrollment_key"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "coaching_sessions",
+    "name": "Coaching Sessions",
+    "archived": false,
+    "fields": [
+      {
+        "key": "session_key",
+        "type": "string",
+        "required": true,
+        "is_key": true
+      },
+      {
+        "key": "enrollment_key",
+        "type": "string",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "session_date",
+        "type": "date",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "started_at",
+        "type": "datetime",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "engagement_score",
+        "type": "float",
+        "required": true,
+        "is_key": false
+      },
+      {
+        "key": "completed",
+        "type": "boolean",
+        "required": true,
+        "is_key": false
+      }
+    ],
+    "relationships": []
+  }
+]

@@ -1,0 +1,246 @@
+[
+  {
+    "id": "care-team-archived",
+    "taxonomy_id": "care_teams",
+    "archived": true,
+    "attributes": {
+      "team_code": "TEAM-ARCHIVED",
+      "assigned_nurse": "Nurse Archived",
+      "clinic_code": "CLINIC-EAST",
+      "on_call": false
+    }
+  },
+  {
+    "id": "care-team-blue",
+    "taxonomy_id": "care_teams",
+    "archived": false,
+    "attributes": {
+      "team_code": "TEAM-BLUE",
+      "assigned_nurse": "Nurse Carter",
+      "clinic_code": "CLINIC-NORTH",
+      "on_call": false
+    }
+  },
+  {
+    "id": "care-team-red",
+    "taxonomy_id": "care_teams",
+    "archived": false,
+    "attributes": {
+      "team_code": "TEAM-RED",
+      "assigned_nurse": "Nurse Joy",
+      "clinic_code": "CLINIC-SOUTH",
+      "on_call": true
+    }
+  },
+  {
+    "id": "clinic-east",
+    "taxonomy_id": "clinics",
+    "archived": false,
+    "attributes": {
+      "clinic_code": "CLINIC-EAST",
+      "name": "East Side Clinic",
+      "region": "east",
+      "bed_count": 18,
+      "quality_score": 0.78
+    }
+  },
+  {
+    "id": "clinic-north",
+    "taxonomy_id": "clinics",
+    "archived": false,
+    "attributes": {
+      "clinic_code": "CLINIC-NORTH",
+      "name": "North Harbor Clinic",
+      "region": "north",
+      "bed_count": 12,
+      "quality_score": 0.89
+    }
+  },
+  {
+    "id": "clinic-south",
+    "taxonomy_id": "clinics",
+    "archived": false,
+    "attributes": {
+      "clinic_code": "CLINIC-SOUTH",
+      "name": "South Loop Clinic",
+      "region": "central",
+      "bed_count": 24,
+      "quality_score": 0.94
+    }
+  },
+  {
+    "id": "coaching-session-1",
+    "taxonomy_id": "coaching_sessions",
+    "archived": false,
+    "attributes": {
+      "session_key": "S-001",
+      "enrollment_key": "P1001::CHF",
+      "session_date": "2026-03-01",
+      "started_at": "2026-03-01T14:00:00Z",
+      "engagement_score": 0.82,
+      "completed": true
+    }
+  },
+  {
+    "id": "coaching-session-2",
+    "taxonomy_id": "coaching_sessions",
+    "archived": false,
+    "attributes": {
+      "session_key": "S-002",
+      "enrollment_key": "P1001::CHF",
+      "session_date": "2026-03-08",
+      "started_at": "2026-03-08T14:00:00Z",
+      "engagement_score": 0.74,
+      "completed": false
+    }
+  },
+  {
+    "id": "coaching-session-3",
+    "taxonomy_id": "coaching_sessions",
+    "archived": false,
+    "attributes": {
+      "session_key": "S-003",
+      "enrollment_key": "P1002::COPD",
+      "session_date": "2026-02-14",
+      "started_at": "2026-02-14T15:30:00Z",
+      "engagement_score": 0.91,
+      "completed": true
+    }
+  },
+  {
+    "id": "enrollment-1",
+    "taxonomy_id": "program_enrollments",
+    "archived": false,
+    "attributes": {
+      "enrollment_key": "P1001::CHF",
+      "patient_number": "P1001",
+      "program_key": "CHF",
+      "status": "enrolled",
+      "enrolled_on": "2026-01-10",
+      "opted_in": true,
+      "assigned_coach": "Coach Lee"
+    }
+  },
+  {
+    "id": "enrollment-2",
+    "taxonomy_id": "program_enrollments",
+    "archived": false,
+    "attributes": {
+      "enrollment_key": "P1002::COPD",
+      "patient_number": "P1002",
+      "program_key": "COPD",
+      "status": "waitlisted",
+      "enrolled_on": "2026-01-18",
+      "opted_in": false,
+      "assigned_coach": "Coach Patel"
+    }
+  },
+  {
+    "id": "enrollment-3",
+    "taxonomy_id": "program_enrollments",
+    "archived": true,
+    "attributes": {
+      "enrollment_key": "P1003::DM",
+      "patient_number": "P1003",
+      "program_key": "DM",
+      "status": "declined",
+      "enrolled_on": "2026-01-22",
+      "opted_in": false,
+      "assigned_coach": "Coach Gomez"
+    }
+  },
+  {
+    "id": "patient-1001",
+    "taxonomy_id": "patients",
+    "archived": false,
+    "attributes": {
+      "patient_number": "P1001",
+      "first_name": "John",
+      "last_name": "Doe",
+      "date_of_birth": "1980-04-12",
+      "care_team_code": "TEAM-RED",
+      "current_program_key": "CHF",
+      "status": "active"
+    }
+  },
+  {
+    "id": "patient-1002",
+    "taxonomy_id": "patients",
+    "archived": false,
+    "attributes": {
+      "patient_number": "P1002",
+      "first_name": "Alice",
+      "last_name": "Nguyen",
+      "date_of_birth": "1975-11-03",
+      "care_team_code": "TEAM-BLUE",
+      "current_program_key": "COPD",
+      "status": "paused"
+    }
+  },
+  {
+    "id": "patient-1003",
+    "taxonomy_id": "patients",
+    "archived": false,
+    "attributes": {
+      "patient_number": "P1003",
+      "first_name": "Marisol",
+      "last_name": "Rivera",
+      "date_of_birth": "1991-08-20",
+      "care_team_code": "TEAM-ARCHIVED",
+      "current_program_key": "DM",
+      "status": "active"
+    }
+  },
+  {
+    "id": "ticket-1",
+    "taxonomy_id": "support_tickets",
+    "archived": false,
+    "attributes": {
+      "ticket_number": "T-001",
+      "patient_number": "P1001",
+      "status": "open",
+      "priority": "high",
+      "is_urgent": true,
+      "opened_at": "2026-03-02T09:15:00Z"
+    }
+  },
+  {
+    "id": "ticket-2",
+    "taxonomy_id": "support_tickets",
+    "archived": false,
+    "attributes": {
+      "ticket_number": "T-002",
+      "patient_number": "P1001",
+      "status": "pending",
+      "priority": "medium",
+      "is_urgent": false,
+      "opened_at": "2026-03-05T12:00:00Z"
+    }
+  },
+  {
+    "id": "ticket-3",
+    "taxonomy_id": "support_tickets",
+    "archived": true,
+    "attributes": {
+      "ticket_number": "T-003",
+      "patient_number": "P1002",
+      "status": "closed",
+      "priority": "low",
+      "is_urgent": false,
+      "opened_at": "2026-02-01T16:45:00Z"
+    }
+  },
+  {
+    "id": "ticket-4",
+    "taxonomy_id": "support_tickets",
+    "archived": false,
+    "attributes": {
+      "ticket_number": "T-004",
+      "patient_number": "P1002",
+      "status": "open",
+      "priority": "medium",
+      "is_urgent": false,
+      "opened_at": "2026-03-07T08:30:00Z"
+    }
+  }
+]

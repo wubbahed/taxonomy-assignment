@@ -1,0 +1,1043 @@
+openapi: 3.1.0
+info:
+  title: Aviary API
+  version: 0.1.0
+  summary: Taxonomy + entity graph service with path-based data resolution.
+  description: |
+    Aviary is a schema-flexible entity store. Users declare **taxonomies**
+    (schemas) at runtime, each with typed **fields** and **relationships** to
+    other taxonomies. **Entities** are records whose `attributes` are a flat
+    map of scalar values keyed by their taxonomy's field keys.
+
+    Relationships are **computed, not stored**: `to_one` / `to_many` resolve
+    at read time by matching `source_field` values on one side to
+    `target_field` values on the other; `to_many_through` composes an
+    ordered chain of other relationships. There are no foreign keys between
+    entities in the database — every traversal re-resolves.
+
+    ### Contract invariants
+    - Non-2xx responses use the error envelope `{ error: { code, message, details? } }`.
+    - Collections return ascending `id` order. Related entities in `to_many`
+      traversal sort by target `id` ascending.
+    - `POST /resolve` **always** returns 200. Per-path failures appear in
+      `response.errors[path]`, never in an envelope.
+    - Archived related entities are treated as missing during traversal.
+      Archived **root** taxonomies and entities are still served on direct
+      lookup — this is intentional.
+    - Attributes are scalar only (string / integer / float / boolean /
+      date / datetime / null). Objects and arrays are rejected.
+
+    ### Request correlation
+    Every response echoes `x-request-id`. Clients may send one in; if
+    absent, the server generates a UUID. Server logs include `request_id`
+    for end-to-end tracing.
+  contact:
+    name: Aviary
+  license:
+    name: UNLICENSED
+servers:
+  - url: http://localhost:3000
+    description: Local development
+tags:
+  - name: health
+    description: Liveness and readiness probes.
+  - name: taxonomies
+    description: Taxonomy CRUD and schema introspection.
+  - name: entities
+    description: Entity CRUD and graph traversal.
+  - name: resolve
+    description: Dot-notation path resolution across relationships.
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe.
+      description: |
+        Returns 200 unconditionally while the process is alive. Does **not**
+        check the database — use `/readyz` for readiness gating.
+      operationId: getHealthz
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthzResponse"
+              examples:
+                ok:
+                  value: { ok: true }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe.
+      description: |
+        Pings the database with `SELECT 1`. Returns 200 on success or 503 with
+        the error envelope when the database is unreachable. Use this as the
+        load-balancer health check; `/healthz` is liveness only.
+      operationId: getReadyz
+      responses:
+        "200":
+          description: Database reachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyzResponse"
+              examples:
+                ok:
+                  value: { ok: true, db: "ok" }
+        "503":
+          description: Database unreachable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                unavailable:
+                  value:
+                    error:
+                      code: unavailable
+                      message: database is not reachable
+
+  /taxonomies:
+    get:
+      tags: [taxonomies]
+      summary: List taxonomies.
+      description: |
+        Returns all taxonomies in ascending `id` order. Archived taxonomies
+        are excluded unless `include_archived=true`.
+      operationId: listTaxonomies
+      parameters:
+        - $ref: "#/components/parameters/IncludeArchived"
+      responses:
+        "200":
+          description: Taxonomy collection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaxonomyList" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    post:
+      tags: [taxonomies]
+      summary: Create a taxonomy.
+      description: |
+        Validates structure (unique keys, supported types, valid relationship
+        refs including `to_many_through` cycle detection) and references
+        before writing. `archived` defaults to `false`.
+
+        Returns `409 conflict` when a taxonomy with the same `id` already
+        exists.
+      operationId: createTaxonomy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTaxonomy" }
+            examples:
+              patients: { $ref: "#/components/examples/PatientsTaxonomy" }
+      responses:
+        "201":
+          description: Taxonomy created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Taxonomy" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /taxonomies/{taxonomy_id}:
+    parameters:
+      - $ref: "#/components/parameters/TaxonomyId"
+    get:
+      tags: [taxonomies]
+      summary: Get a taxonomy by id.
+      description: |
+        Archived taxonomies are returned on direct lookup (archive status
+        only affects list endpoints and traversal).
+      operationId: getTaxonomy
+      responses:
+        "200":
+          description: Taxonomy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Taxonomy" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    patch:
+      tags: [taxonomies]
+      summary: Update a taxonomy.
+      description: |
+        Allowed top-level keys: `name`, `archived`, `fields`, `relationships`.
+        Any other key (including `id`) produces a `400 validation_error`.
+
+        Provided keys **replace** the existing value (no merging of field or
+        relationship arrays). When `fields` changes, the server runs an
+        entity-compatibility guard: removing a field that entities use,
+        changing a type that orphans values, or promoting an optional field
+        to required without populating it returns `409 conflict` with a
+        per-entity breakage map in `details.entities`.
+      operationId: patchTaxonomy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchTaxonomy" }
+            examples:
+              rename:
+                value:
+                  name: Patients (v2)
+              archive:
+                value:
+                  archived: true
+      responses:
+        "200":
+          description: Taxonomy updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Taxonomy" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [taxonomies]
+      summary: Delete a taxonomy.
+      description: |
+        Returns `409 conflict` if any entities still belong to the taxonomy
+        or any other taxonomy still references it in a relationship.
+      operationId: deleteTaxonomy
+      responses:
+        "204":
+          description: Taxonomy deleted.
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /taxonomies/{taxonomy_id}/relationship-graph:
+    parameters:
+      - $ref: "#/components/parameters/TaxonomyId"
+    get:
+      tags: [taxonomies]
+      summary: Introspect a taxonomy's relationship graph.
+      description: |
+        Returns a nested schema view rooted at the given taxonomy. Each node
+        includes the root `taxonomy_id` key plus `fieldKey: fieldType` entries
+        for every field, and nested nodes for each relationship.
+
+        **Depth semantics** — `depth=1` means only the root's own fields;
+        `depth=2` includes one relationship hop; `depth=3` includes two; and
+        so on. Archived taxonomies are omitted from recursion. Cycle handling
+        is automatic.
+
+        Returns `413 response_too_large` when the produced graph exceeds the
+        server's node budget.
+      operationId: getRelationshipGraph
+      parameters:
+        - name: depth
+          in: query
+          description: Traversal depth (>= 1). Defaults to 2.
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 2
+      responses:
+        "200":
+          description: Relationship graph.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelationshipGraphResponse" }
+              examples:
+                patients:
+                  value:
+                    taxonomy_id: patients
+                    depth: 2
+                    graph:
+                      taxonomy_id: patients
+                      patient_number: string
+                      first_name: string
+                      last_name: string
+                      care_team:
+                        taxonomy_id: care_teams
+                        team_code: string
+                        assigned_nurse: string
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/ResponseTooLarge" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /entities:
+    get:
+      tags: [entities]
+      summary: List entities for a taxonomy.
+      description: |
+        Scoped by required `taxonomy_id`. Returns in ascending `id` order.
+        Archived entities are excluded unless `include_archived=true`.
+      operationId: listEntities
+      parameters:
+        - name: taxonomy_id
+          in: query
+          required: true
+          description: Taxonomy whose entities to list.
+          schema: { type: string, minLength: 1 }
+        - $ref: "#/components/parameters/IncludeArchived"
+      responses:
+        "200":
+          description: Entity collection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EntityList" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    post:
+      tags: [entities]
+      summary: Create an entity.
+      description: |
+        Validates that the referenced taxonomy exists, that attribute keys
+        are declared fields, that values match the declared types, and that
+        all `required` fields are present. `archived` defaults to `false`.
+
+        Returns `409 conflict` when an entity with the same `id` already
+        exists.
+      operationId: createEntity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateEntity" }
+            examples:
+              patient: { $ref: "#/components/examples/PatientEntity" }
+      responses:
+        "201":
+          description: Entity created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Entity" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /entities/{entity_id}:
+    parameters:
+      - $ref: "#/components/parameters/EntityId"
+    get:
+      tags: [entities]
+      summary: Get an entity by id.
+      description: |
+        Archived entities are returned on direct lookup (archive status only
+        affects list endpoints and traversal).
+      operationId: getEntity
+      responses:
+        "200":
+          description: Entity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Entity" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    patch:
+      tags: [entities]
+      summary: Update an entity.
+      description: |
+        Allowed top-level keys: `archived`, `attributes`. Any other key
+        (including `id` and `taxonomy_id`) returns `400 validation_error`.
+
+        `attributes` is **merged** into the existing attribute map; keys
+        explicitly set to `null` unset that attribute (legal for
+        non-required fields only).
+      operationId: patchEntity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchEntity" }
+            examples:
+              setField:
+                value:
+                  attributes:
+                    first_name: Jane
+              archive:
+                value:
+                  archived: true
+      responses:
+        "200":
+          description: Entity updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Entity" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [entities]
+      summary: Delete an entity.
+      description: Hard delete. Returns 204 on success.
+      operationId: deleteEntity
+      responses:
+        "204":
+          description: Entity deleted.
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /entities/{entity_id}/data:
+    parameters:
+      - $ref: "#/components/parameters/EntityId"
+    get:
+      tags: [entities]
+      summary: Traverse an entity's related data.
+      description: |
+        Walks the entity's relationships up to `depth` hops and returns the
+        resolved graph. Always includes the root entity's `id` and its
+        attributes.
+
+        ### Traversal rules
+        - `to_one` with no active match → `null` (nested format).
+        - `to_one` with multiple matches → **`409 conflict`** (`ambiguous_to_one`).
+        - `to_many` / `to_many_through` are **omitted** unless
+          `include_to_many=true`; when included they serialize as arrays
+          (nested) or numeric dot-notation (`support_tickets.0.status`) in
+          flat format.
+        - Archived related entities are treated as missing.
+
+        `format=flat` produces a single-level map with dot-notation keys;
+        `format=nested` (default) mirrors the relationship tree.
+      operationId: getEntityData
+      parameters:
+        - name: depth
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 2
+        - name: include_to_many
+          in: query
+          required: false
+          description: Include `to_many` and `to_many_through` relationships.
+          schema:
+            type: boolean
+            default: false
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [nested, flat]
+            default: nested
+      responses:
+        "200":
+          description: Traversed data.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EntityDataResponse" }
+              examples:
+                nested:
+                  summary: format=nested
+                  value:
+                    entity_id: patient-1001
+                    taxonomy_id: patients
+                    data:
+                      id: patient-1001
+                      patient_number: P1001
+                      first_name: John
+                      care_team:
+                        id: care-team-red
+                        team_code: TEAM-RED
+                        assigned_nurse: Nurse Joy
+                flat:
+                  summary: format=flat
+                  value:
+                    entity_id: patient-1001
+                    taxonomy_id: patients
+                    data:
+                      id: patient-1001
+                      patient_number: P1001
+                      care_team.id: care-team-red
+                      care_team.assigned_nurse: Nurse Joy
+                      support_tickets.0.id: ticket-1
+                      support_tickets.0.status: open
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /resolve:
+    post:
+      tags: [resolve]
+      summary: Resolve dot-notation paths against an entity.
+      description: |
+        **Always returns 200.** Invalid or unresolvable paths are reported in
+        `response.errors[path]`, never via the error envelope.
+
+        ### Path grammar
+        - All non-terminal segments must be **relationship keys**.
+        - The terminal segment must be a **field key**.
+        - Paths that traverse only `to_one` relationships resolve to a scalar
+          or `null`.
+        - Paths traversing any `to_many` or `to_many_through` relationship
+          resolve to an array, ordered by related entity `id` ascending.
+          Empty arrays `[]` when no active matches exist.
+
+        ### Per-path error codes (inside `response.errors`)
+        | Code | Meaning |
+        |---|---|
+        | `field_not_found` | Terminal segment isn't a field on the target taxonomy. |
+        | `relationship_not_found` | Non-terminal segment isn't a relationship. |
+        | `invalid_path` | Segment exists but is the wrong kind (field at non-terminal, relationship at terminal, empty segment). |
+        | `ambiguous_to_one` | A `to_one` hop matched more than one entity. |
+        | `taxonomy_not_found` | Target taxonomy of a relationship has been deleted. |
+
+        The only non-2xx responses are `400` (malformed body) and
+        `404` (unknown `entity_id`).
+      operationId: resolvePaths
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResolveRequest" }
+            examples:
+              mixed:
+                value:
+                  entity_id: patient-1001
+                  paths:
+                    - first_name
+                    - care_team.assigned_nurse
+                    - support_tickets.status
+                    - coaching_sessions.engagement_score
+      responses:
+        "200":
+          description: Resolution result. Partial failures appear under `errors`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResolveResponse" }
+              examples:
+                success:
+                  value:
+                    entity_id: patient-1001
+                    values:
+                      first_name: John
+                      care_team.assigned_nurse: Nurse Joy
+                      support_tickets.status: [open, pending]
+                      coaching_sessions.engagement_score: [0.82, 0.74]
+                    errors: {}
+                partial:
+                  value:
+                    entity_id: patient-1001
+                    values:
+                      first_name: John
+                    errors:
+                      care_team.unknown_field:
+                        code: field_not_found
+                        message: Field 'unknown_field' does not exist on taxonomy 'care_teams'
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+components:
+  parameters:
+    TaxonomyId:
+      name: taxonomy_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+      description: Taxonomy identifier.
+
+    EntityId:
+      name: entity_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+      description: Entity identifier.
+
+    IncludeArchived:
+      name: include_archived
+      in: query
+      required: false
+      description: When `true`, include archived records. Defaults to `false`.
+      schema:
+        type: boolean
+        default: false
+
+  responses:
+    ValidationError:
+      description: Input failed validation.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            field:
+              value:
+                error:
+                  code: validation_error
+                  message: "attributes.date_of_birth: expected date (YYYY-MM-DD)"
+                  details:
+                    fields:
+                      "attributes.date_of_birth": expected date
+
+    NotFound:
+      description: Resource does not exist.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            entity:
+              value:
+                error:
+                  code: not_found
+                  message: "Entity 'patient-9999' not found"
+                  details:
+                    resource: Entity
+                    id: patient-9999
+
+    Conflict:
+      description: |
+        Request is well-formed but the current state forbids it. Examples:
+        duplicate id, taxonomy deletion blocked by entities or inbound refs,
+        PATCH taxonomy incompatible with existing entities, or `ambiguous_to_one`
+        during `/data` traversal.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            duplicate:
+              value:
+                error:
+                  code: conflict
+                  message: "Taxonomy 'patients' already exists"
+                  details:
+                    id: patients
+            incompatible:
+              value:
+                error:
+                  code: conflict
+                  message: "field change would orphan existing entity values"
+                  details:
+                    entities:
+                      "patient-1001":
+                        - removed field 'legacy_code' still in use
+
+    ResponseTooLarge:
+      description: Produced response would exceed server budgets.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            graph:
+              value:
+                error:
+                  code: response_too_large
+                  message: "relationship graph exceeded node budget"
+
+    InternalError:
+      description: Unhandled server error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            internal:
+              value:
+                error:
+                  code: internal_error
+                  message: "internal server error"
+
+  examples:
+    PatientsTaxonomy:
+      value:
+        id: patients
+        name: Patients
+        archived: false
+        fields:
+          - { key: patient_number, type: string,   required: true,  is_key: true  }
+          - { key: first_name,     type: string,   required: true,  is_key: false }
+          - { key: last_name,      type: string,   required: true,  is_key: false }
+          - { key: date_of_birth,  type: date,     required: true,  is_key: false }
+          - { key: care_team_code, type: string,   required: false, is_key: false }
+        relationships:
+          - key: care_team
+            target_taxonomy_id: care_teams
+            cardinality: to_one
+            match:
+              - { source_field: care_team_code, target_field: team_code }
+          - key: coaching_sessions
+            target_taxonomy_id: coaching_sessions
+            cardinality: to_many_through
+            through: [current_enrollment, coaching_sessions]
+
+    PatientEntity:
+      value:
+        id: patient-1001
+        taxonomy_id: patients
+        archived: false
+        attributes:
+          patient_number: P1001
+          first_name: John
+          last_name: Doe
+          date_of_birth: "1980-01-15"
+          care_team_code: TEAM-RED
+
+  schemas:
+    # ----- Primitives --------------------------------------------------------
+    FieldType:
+      type: string
+      enum: [string, integer, boolean, float, date, datetime]
+      description: Supported scalar field types.
+
+    ErrorCode:
+      type: string
+      description: |
+        Stable `code` values emitted on non-2xx envelopes. Clients may
+        branch on these.
+      enum:
+        - validation_error
+        - not_found
+        - conflict
+        - response_too_large
+        - not_implemented
+        - internal_error
+        - unavailable
+
+    ResolvePathErrorCode:
+      type: string
+      description: |
+        Per-path failure codes returned **inside** a 200 `POST /resolve`
+        response under `errors[path]`. These never appear in an envelope.
+      enum:
+        - field_not_found
+        - relationship_not_found
+        - invalid_path
+        - ambiguous_to_one
+        - taxonomy_not_found
+
+    AttributeValue:
+      description: |
+        A scalar attribute value. Objects and arrays are rejected by the
+        validator; `null` is legal on non-required fields.
+      oneOf:
+        - type: string
+        - type: number
+        - type: boolean
+        - type: "null"
+
+    # ----- Error envelope ----------------------------------------------------
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code: { $ref: "#/components/schemas/ErrorCode" }
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: true
+              description: Optional structured detail about the failure.
+
+    # ----- Taxonomy ----------------------------------------------------------
+    TaxonomyField:
+      type: object
+      required: [key, type, required, is_key]
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          minLength: 1
+          description: Attribute name on entities.
+        type: { $ref: "#/components/schemas/FieldType" }
+        required:
+          type: boolean
+          description: When true, entities must provide this key on create.
+        is_key:
+          type: boolean
+          description: |
+            Marks the taxonomy's canonical identifier. Informational only —
+            the primary uniqueness guarantee is the entity `id`.
+
+    RelationshipMatch:
+      type: object
+      required: [source_field, target_field]
+      additionalProperties: false
+      properties:
+        source_field: { type: string, minLength: 1 }
+        target_field: { type: string, minLength: 1 }
+
+    DirectRelationship:
+      type: object
+      required: [key, target_taxonomy_id, cardinality, match]
+      additionalProperties: false
+      properties:
+        key: { type: string, minLength: 1 }
+        target_taxonomy_id: { type: string, minLength: 1 }
+        cardinality:
+          type: string
+          enum: [to_one, to_many]
+        match:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/RelationshipMatch" }
+
+    ThroughRelationship:
+      type: object
+      required: [key, target_taxonomy_id, cardinality, through]
+      additionalProperties: false
+      properties:
+        key: { type: string, minLength: 1 }
+        target_taxonomy_id: { type: string, minLength: 1 }
+        cardinality:
+          type: string
+          enum: [to_many_through]
+        through:
+          type: array
+          minItems: 1
+          description: |
+            Ordered list of relationship keys to walk from the source taxonomy
+            to reach `target_taxonomy_id`. Composes existing relationships;
+            does not declare its own `match`.
+          items: { type: string, minLength: 1 }
+
+    Relationship:
+      description: |
+        Discriminated on `cardinality`. `to_one` and `to_many` use `match`;
+        `to_many_through` uses `through`.
+      oneOf:
+        - $ref: "#/components/schemas/DirectRelationship"
+        - $ref: "#/components/schemas/ThroughRelationship"
+      discriminator:
+        propertyName: cardinality
+        mapping:
+          to_one: "#/components/schemas/DirectRelationship"
+          to_many: "#/components/schemas/DirectRelationship"
+          to_many_through: "#/components/schemas/ThroughRelationship"
+
+    Taxonomy:
+      type: object
+      required: [id, name, archived, fields, relationships]
+      additionalProperties: false
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        archived: { type: boolean }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/TaxonomyField" }
+        relationships:
+          type: array
+          items: { $ref: "#/components/schemas/Relationship" }
+
+    CreateTaxonomy:
+      type: object
+      required: [id, name, fields, relationships]
+      additionalProperties: false
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        archived:
+          type: boolean
+          default: false
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/TaxonomyField" }
+        relationships:
+          type: array
+          items: { $ref: "#/components/schemas/Relationship" }
+
+    PatchTaxonomy:
+      type: object
+      additionalProperties: false
+      description: |
+        Only `name`, `archived`, `fields`, `relationships` are allowed. Any
+        other top-level key (including `id`) returns `400 validation_error`.
+        `fields` and `relationships` REPLACE existing arrays; there is no
+        merge.
+      properties:
+        name: { type: string, minLength: 1 }
+        archived: { type: boolean }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/TaxonomyField" }
+        relationships:
+          type: array
+          items: { $ref: "#/components/schemas/Relationship" }
+
+    TaxonomyList:
+      type: object
+      required: [data]
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Taxonomy" }
+
+    # ----- Entity ------------------------------------------------------------
+    Entity:
+      type: object
+      required: [id, taxonomy_id, archived, attributes]
+      additionalProperties: false
+      properties:
+        id: { type: string, minLength: 1 }
+        taxonomy_id: { type: string, minLength: 1 }
+        archived: { type: boolean }
+        attributes:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/AttributeValue" }
+          description: Flat map of scalar attribute values keyed by field key.
+
+    CreateEntity:
+      type: object
+      required: [id, taxonomy_id, attributes]
+      additionalProperties: false
+      properties:
+        id: { type: string, minLength: 1 }
+        taxonomy_id: { type: string, minLength: 1 }
+        archived:
+          type: boolean
+          default: false
+        attributes:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/AttributeValue" }
+
+    PatchEntity:
+      type: object
+      additionalProperties: false
+      description: |
+        Only `archived` and `attributes` are allowed. `attributes` is MERGED
+        into the existing map (not replaced); keys set to `null` unset that
+        attribute (legal for non-required fields only). `id` and
+        `taxonomy_id` are immutable.
+      properties:
+        archived: { type: boolean }
+        attributes:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/AttributeValue" }
+
+    EntityList:
+      type: object
+      required: [data]
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Entity" }
+
+    # ----- Health ------------------------------------------------------------
+    HealthzResponse:
+      type: object
+      required: [ok]
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+          const: true
+
+    ReadyzResponse:
+      type: object
+      required: [ok]
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+          const: true
+        db:
+          type: string
+          example: ok
+
+    # ----- Relationship graph ------------------------------------------------
+    RelationshipGraphNode:
+      type: object
+      description: |
+        A node in the taxonomy relationship graph. Every node carries a
+        `taxonomy_id` key. Field entries are `<fieldKey>: <FieldType>` strings.
+        Nested relationship entries are objects of the same shape.
+      required: [taxonomy_id]
+      properties:
+        taxonomy_id: { type: string }
+      additionalProperties:
+        oneOf:
+          - { $ref: "#/components/schemas/FieldType" }
+          - { $ref: "#/components/schemas/RelationshipGraphNode" }
+
+    RelationshipGraphResponse:
+      type: object
+      required: [taxonomy_id, depth, graph]
+      additionalProperties: false
+      properties:
+        taxonomy_id: { type: string }
+        depth:
+          type: integer
+          minimum: 1
+        graph: { $ref: "#/components/schemas/RelationshipGraphNode" }
+
+    # ----- Entity /data traversal -------------------------------------------
+    EntityDataResponse:
+      type: object
+      required: [entity_id, taxonomy_id, data]
+      additionalProperties: false
+      description: |
+        `data` is either a nested object (format=nested) or a flat map with
+        dot-notation keys (format=flat). Shape depends on the taxonomy and
+        traversal parameters.
+      properties:
+        entity_id: { type: string }
+        taxonomy_id: { type: string }
+        data:
+          type: object
+          additionalProperties: true
+
+    # ----- Resolve -----------------------------------------------------------
+    ResolveRequest:
+      type: object
+      required: [entity_id, paths]
+      additionalProperties: false
+      properties:
+        entity_id:
+          type: string
+          minLength: 1
+        paths:
+          type: array
+          minItems: 1
+          description: |
+            Dot-notation paths to resolve. Non-terminal segments must be
+            relationship keys; the terminal segment must be a field key.
+          items:
+            type: string
+            minLength: 1
+
+    ResolvePathError:
+      type: object
+      required: [code, message]
+      additionalProperties: false
+      properties:
+        code: { $ref: "#/components/schemas/ResolvePathErrorCode" }
+        message: { type: string }
+
+    ResolveResponse:
+      type: object
+      required: [entity_id, values, errors]
+      additionalProperties: false
+      description: |
+        Always returned with HTTP 200 for well-formed requests against an
+        existing entity. `values` and `errors` are disjoint: a path appears
+        in exactly one of them.
+      properties:
+        entity_id: { type: string }
+        values:
+          type: object
+          description: |
+            Path → resolved value. Scalars for paths through only `to_one`
+            hops, arrays for paths through any `to_many`/`to_many_through`.
+          additionalProperties: true
+        errors:
+          type: object
+          description: Path → failure reason (disjoint from `values`).
+          additionalProperties: { $ref: "#/components/schemas/ResolvePathError" }

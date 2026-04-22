@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aviary
+          POSTGRES_PASSWORD: aviary
+          POSTGRES_DB: aviary
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aviary -d aviary"
+          --health-interval=2s
+          --health-timeout=3s
+          --health-retries=20
+
+    env:
+      DATABASE_URL: postgres://aviary:aviary@localhost:5432/aviary
+      TEST_DATABASE_URL: postgres://aviary:aviary@localhost:5432/aviary
+      FIXTURE_DIR: ./fixtures/public
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --workspaces --include-workspace-root
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test
